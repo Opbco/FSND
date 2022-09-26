@@ -116,7 +116,7 @@ class VenueForm(FlaskForm):
         'address', validators=[InputRequired()]
     )
     phone = StringField(
-        'phone'
+        'phone', validators=[Regexp("((?:\+\d{2}[-\.\s]??|\d{4}[-\.\s]??)?(?:\d{3}[-\.\s]??\d{3}[-\.\s]??\d{4}|\(\d{3}\)\s*\d{3}[-\.\s]??\d{4}|\d{3}[-\.\s]??\d{4}))", message="Enter a valid US phone number")]
     )
     image_link = StringField(
         'image_link'
@@ -218,8 +218,8 @@ class ArtistForm(FlaskForm):
     )
     facebook_link = StringField(
         # TODO implement enum restriction
-        # don't understand how to implement enum restriction here
-        'facebook_link', validators=[URL()]
+        # https://stackoverflow.com/questions/5205652/facebook-profile-url-regular-expression
+        'facebook_link', validators=[URL(), Regexp("(?:(?:http|https):\/\/)?(?:www.)?facebook.com\/(?:(?:\w)*#!\/)?(?:pages\/)?(?:[?\w\-]*\/)?(?:profile.php\?id=(?=\d.*))?([\w\-]*)?", message="Enter a valid FaceBook profile URL")]
     )
 
     website_link = StringField(

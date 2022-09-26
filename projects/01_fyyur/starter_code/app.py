@@ -4,6 +4,8 @@
 
 from email.policy import default
 from json import dump
+from operator import and_
+from os import abort
 from sre_parse import State
 import dateutil.parser
 import babel
@@ -16,6 +18,7 @@ from flask_wtf import Form
 from flask_migrate import Migrate
 from forms import *
 from datetime import datetime
+from models import *
 #----------------------------------------------------------------------------#
 # App Config.
 #----------------------------------------------------------------------------#
@@ -23,62 +26,10 @@ from datetime import datetime
 app = Flask(__name__)
 moment = Moment(app)
 app.config.from_object('config')
-db = SQLAlchemy(app)
+
+setup_db(app)
 
 # TODO: connect to a local postgresql database
-
-#----------------------------------------------------------------------------#
-# Models.
-#----------------------------------------------------------------------------#
-
-
-class Show(db.Model):
-    __tablename__ = "Show"
-    artist_id = db.Column(db.Integer, db.ForeignKey(
-        'Artist.id'), primary_key=True)
-    venue_id = db.Column(db.Integer, db.ForeignKey(
-        'Venue.id', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True)
-    start_time = db.Column(db.DateTime, primary_key=True)
-
-
-class Venue(db.Model):
-    __tablename__ = 'Venue'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
-    city = db.Column(db.String(120), nullable=False)
-    state = db.Column(db.String(120), nullable=False)
-    address = db.Column(db.String(120), nullable=False)
-    phone = db.Column(db.String(120))
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-    genres = db.Column(db.String(120), nullable=False)
-    website_link = db.Column(db.String(120))
-    seeking_talent = db.Column(db.Boolean, default=False)
-    seeking_description = db.Column(db.String(500))
-    # artists : relationship mamyTomany with artist through show
-    shows = db.relationship('Show', backref='venue', lazy=True)
-
-    def __repr__(self) -> str:
-        return f'<Venue ID: {self.id}, name: {self.name}, city: {self.city} >'
-
-
-class Artist(db.Model):
-    __tablename__ = 'Artist'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False, unique=True)
-    city = db.Column(db.String(120), nullable=False)
-    state = db.Column(db.String(120), nullable=False)
-    phone = db.Column(db.String(120))
-    genres = db.Column(db.String(120), nullable=False)
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-    website_link = db.Column(db.String(120))
-    seeking_venue = db.Column(db.Boolean, default=False)
-    seeking_description = db.Column(db.String(500))
-    # venues : relationship mamyTomany with venue through show
-    shows = db.relationship('Show', backref='artist', lazy=True)
 
 
 # TODO: implement any missing fields, as a database migration using Flask-Migrate
@@ -130,8 +81,7 @@ def venues():
             allvenues.append({
                 "id": venue.id,
                 "name": venue.name,
-                "num_upcoming_shows": Show.query.filter(
-                    Show.venue_id == venue.id, Show.start_time >= datetime.today()).count()
+                "num_upcoming_shows": venue.upcoming_shows().count()
             })
         data.append({
             "city": venueState.city,
@@ -157,8 +107,7 @@ def search_venues():
         data.append({
             "id": venue.id,
             "name": venue.name,
-            "num_upcoming_shows": Show.query.filter(
-                Show.venue_id == venue.id, Show.start_time >= datetime.today()).count()
+            "num_upcoming_shows": venue.upcoming_shows().count()
         })
 
     response = {
@@ -174,19 +123,11 @@ def show_venue(venue_id):
     # TODO: replace with real venue data from the venues table, using venue_id
     venue = Venue.query.get(venue_id)
 
-    # get the list of shows with venue_id and the start_time is to come
-    showquery = Show.query.filter(
-        Show.venue_id == venue_id, Show.start_time >= datetime.today())
-
-    # get the list of shows with venue_id and the start_time is passed
-    pastshowquery = Show.query.filter(
-        Show.venue_id == venue_id, Show.start_time < datetime.today())
-
     # structure the result as it is intended from the view
     pastshows = []
     artistShow = []
 
-    for show in showquery.all():
+    for show in venue.upcoming_shows().all():
         artistShow.append({
             "artist_id": show.artist.id,
             "artist_name": show.artist.name,
@@ -194,7 +135,7 @@ def show_venue(venue_id):
             "start_time": str(show.start_time)
         })
 
-    for show in pastshowquery.all():
+    for show in venue.past_shows().all():
         pastshows.append({
             "artist_id": show.artist.id,
             "artist_name": show.artist.name,
@@ -205,7 +146,7 @@ def show_venue(venue_id):
     data = {
         "id": venue_id,
         "name": venue.name,
-        "genres": venue.genres[1:-1].split(','),
+        "genres": venue.genres,
         "address": venue.address,
         "city": venue.city,
         "state": venue.state,
@@ -269,16 +210,21 @@ def delete_venue(venue_id):
 
     # BONUS CHALLENGE: Implement a button to delete a Venue on a Venue Page, have it so that
     # clicking that button delete it from the db then redirect the user to the homepage
+    error = False
     try:
         Venue.query.filter_by(id=venue_id).delete()
         db.session.commit()
         flash('the venue '+venue_id+' has been deleted', category="success")
     except:
         flash('Error while deleting the venue '+venue_id, category="error")
+        error = True
         db.session.rollback()
     finally:
         db.session.close()
-        return jsonify({'message': 'delete venue'})
+    if error:
+        abort(500)
+    else:
+        return '', 200
 
 
 #  Artists
@@ -312,8 +258,7 @@ def search_artists():
         data.append({
             "id": artist.id,
             "name": artist.name,
-            "num_upcoming_shows": Show.query.filter(
-                Show.artist_id == artist.id, Show.start_time >= datetime.today()).count()
+            "num_upcoming_shows": artist.upcoming_shows().count()
         })
     response = {
         "count": artistsquery.count(),
@@ -328,15 +273,10 @@ def show_artist(artist_id):
     # TODO: replace with real artist data from the artist table, using artist_id
     artist = Artist.query.get(artist_id)
 
-    showquery = Show.query.filter(
-        Show.artist_id == artist_id, Show.start_time >= datetime.today())
-
-    pastshowquery = Show.query.filter(
-        Show.artist_id == artist_id, Show.start_time < datetime.today())
     pastshows = []
     artistShow = []
 
-    for show in showquery.all():
+    for show in artist.upcoming_shows().all():
         artistShow.append({
             "venue_id": show.venue.id,
             "venue_name": show.venue.name,
@@ -344,7 +284,7 @@ def show_artist(artist_id):
             "start_time": str(show.start_time)
         })
 
-    for show in pastshowquery.all():
+    for show in artist.past_shows().all():
         pastshows.append({
             "venue_id": show.venue.id,
             "venue_name": show.venue.name,
@@ -355,7 +295,7 @@ def show_artist(artist_id):
     data = {
         "id": artist.id,
         "name": artist.name,
-        "genres": artist.genres[1:-1].split(','),
+        "genres": artist.genres,
         "city": artist.city,
         "state": artist.state,
         "phone": artist.phone,
@@ -584,6 +524,31 @@ def create_show_submission():
 
     flash('Make sure you entered all required information.', category="warning")
     return render_template('forms/new_show.html', form=form)
+
+
+@ app.route('/shows/search', methods=['POST', 'GET'])
+def search_shows():
+    # seach for a show base on the starting date and ending date
+    starting_date = request.form.get('start_time', datetime.now())
+    ending_date = request.form.get('end_time', datetime.now())
+
+    data = []
+
+    for show in Show.searchShows(ending_date=ending_date, starting_date=starting_date).all():
+        data.append({
+            "venue_id": show.venue.id,
+            "venue_name": show.venue.name,
+            "artist_id": show.artist.id,
+            "artist_name": show.artist.name,
+            "artist_image_link": show.artist.image_link,
+            "start_time": str(show.start_time)
+        })
+
+    response = {
+        "count": len(data),
+        "data": data
+    }
+    return render_template('pages/show.html', results=response, ending_date=ending_date, starting_date=starting_date)
 
 
 @app.errorhandler(404)
